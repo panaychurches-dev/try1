@@ -1,0 +1,669 @@
+<?php
+require_once __DIR__ . '/session_config.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header('Location: index.php');
+    exit;
+}
+
+$dashboardUrl = ($_SESSION['user_role'] ?? '') === 'admin' ? 'admin.php' : 'dashboard.php';
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan Document | DocTrack</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; background: #f4f8f5; color: #17251c; font-family: Inter, sans-serif; }
+        a { color: inherit; text-decoration: none; }
+        .dashboard-sidebar { position: fixed; z-index: 1000; inset: 0 auto 0 0; width: 68px; padding: 24px 8px; overflow: hidden; background: #0b3d2e; color: #fff; transition: width .25s ease, padding .25s ease; }
+        .dashboard-sidebar:hover, .dashboard-sidebar:focus-within, .dashboard-sidebar.is-open { width: 260px; padding: 24px 16px; }
+        .sidebar-brand { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px 0 28px; margin-bottom: 22px; border-bottom: 1px solid rgba(255,255,255,.12); }
+        .mini-logo { display: flex; flex: 0 0 46px; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 12px; background: #2e9d63; font-size: 15px; font-weight: 800; }
+        .sidebar-brand > div:not(.mini-logo) { display: none; }
+        .dashboard-sidebar:hover .sidebar-brand, .dashboard-sidebar:focus-within .sidebar-brand, .dashboard-sidebar.is-open .sidebar-brand { justify-content: flex-start; padding: 8px 10px 28px; }
+        .dashboard-sidebar:hover .sidebar-brand > div:not(.mini-logo), .dashboard-sidebar:focus-within .sidebar-brand > div:not(.mini-logo), .dashboard-sidebar.is-open .sidebar-brand > div:not(.mini-logo) { display: block; }
+        .sidebar-brand strong, .sidebar-brand small { display: block; white-space: nowrap; }
+        .sidebar-brand strong { font-size: 14px; }
+        .sidebar-brand small { margin-top: 3px; color: #a9c8b7; font-size: 11px; }
+        .sidebar-nav, .documents-nav-group { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+        .nav-item { display: flex; align-items: center; justify-content: center; gap: 0; width: 100%; padding: 13px 0; border: 0; border-radius: 10px; background: transparent; color: #c7ddd2; font: 500 0/1.3 Inter, sans-serif; text-align: left; white-space: nowrap; cursor: pointer; }
+        .nav-item i { flex: 0 0 20px; width: 20px; font-size: 15px; text-align: center; }
+        .dashboard-sidebar:hover .nav-item, .dashboard-sidebar:focus-within .nav-item, .dashboard-sidebar.is-open .nav-item { justify-content: flex-start; gap: 13px; padding: 13px 14px; font-size: 13px; }
+        .nav-item:hover, .nav-item.active { background: #2e9d63; color: #fff; }
+        .nav-disclosure { font-family: inherit; }
+        .nav-disclosure::after { display: none; content: ""; width: 7px; height: 7px; margin-left: auto; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform .2s ease; }
+        .dashboard-sidebar:hover .nav-disclosure::after, .dashboard-sidebar:focus-within .nav-disclosure::after, .dashboard-sidebar.is-open .nav-disclosure::after { display: block; }
+        .documents-nav-group.is-open .nav-disclosure::after { transform: rotate(225deg) translateY(-2px); }
+        .nav-subitem { display: none; min-height: 38px; padding: 9px 12px 9px 47px; border-radius: 9px; color: #b9d3c5; font-size: 12px; white-space: nowrap; }
+        .documents-nav-group.is-open .nav-subitem { display: flex; align-items: center; gap: 10px; }
+        .nav-subitem i { width: 14px; font-size: 12px; text-align: center; }
+        .nav-subitem:hover, .nav-subitem.active { background: rgba(255,255,255,.1); color: #fff; }
+        .nav-logout { margin-top: 18px; color: #ffb8b8; }
+        .dashboard-page { width: calc(100% - 68px); min-height: 100vh; margin-left: 68px; padding: 32px; }
+        .page-container { max-width: 1000px; margin: 0 auto; }
+        .page-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+        .page-header h1 { margin: 0; color: #123d2c; font-size: 25px; }
+        .page-header p { margin: 6px 0 0; color: #718078; font-size: 13px; }
+        .back-link { color: #0b7546; font-size: 13px; font-weight: 700; }
+        .scanner-card { padding: 22px; border: 1px solid #e3ece6; border-radius: 18px; background: #fff; box-shadow: 0 8px 30px rgba(20,60,40,.06); }
+        .scanner-layout { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 18px; }
+        .scan-camera-stage { position: relative; display: grid; place-items: center; min-height: 380px; overflow: hidden; border-radius: 10px; background: #16231b; }
+        .scanner-video { grid-area: 1/1; display: block; width: 100%; max-height: 70vh; object-fit: contain; }
+        .scan-camera-button, .scan-review-button { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border: 0; border-radius: 50%; box-shadow: 0 4px 14px rgba(0,0,0,.3); cursor: pointer; }
+        .scan-camera-button { position: absolute; z-index: 2; bottom: 18px; left: 50%; transform: translateX(-50%); background: #fff; color: #0b3d2e; font-size: 21px; }
+        .scan-camera-button:disabled { cursor: not-allowed; opacity: .55; }
+        .scan-review-modal { position: fixed; inset: 0; z-index: 4000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; background: rgba(5,25,17,.86); }
+        .scan-review-modal[hidden] { display: none; }
+        .scan-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+        .scan-review-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 40px; height: 40px; border: 0; border-radius: 50%; color: #fff; font-size: 16px; cursor: pointer; }
+        .scan-review-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 16px; color: #fff; font-size: 12px; }
+        .scan-review-tools label { display: inline-flex; align-items: center; gap: 7px; }
+        .scan-review-tools select { min-height: 34px; padding: 6px 10px; border: 1px solid #d4e1d8; border-radius: 7px; background: #fff; color: #173e2d; font: inherit; }
+        .scan-review-retake { background: #b83a3a; }
+        .scan-review-confirm { background: #16804b; }
+        .scan-review-image { display: block; max-width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 150px); object-fit: contain; border-radius: 8px; background: #16231b; }
+        .scan-status { margin: 12px 0; color: #617168; font-size: 12px; line-height: 1.5; }
+        .scan-status.error { color: #a83030; }
+        .scan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .scan-control-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 10px 14px; border: 0; border-radius: 9px; background: #0b7546; color: #fff; font: 700 12px Inter, sans-serif; cursor: pointer; }
+        .scan-control-button:hover { background: #167447; }
+        .scan-control-button:disabled { cursor: not-allowed; opacity: .55; }
+        .scan-page-list { max-height: 380px; overflow-y: auto; }
+        .scan-page-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #edf1ed; color: #40584a; font-size: 12px; }
+        .scan-page-open { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 0; border: 0; background: transparent; color: #0b7546; font: 700 12px Inter, sans-serif; cursor: pointer; }
+        .scan-page-open:hover { text-decoration: underline; }
+        .scan-page-thumb { width: 42px; height: 52px; border: 1px solid #dce7df; border-radius: 5px; object-fit: cover; background: #f4f8f5; }
+        .scan-page-remove { border: 0; background: transparent; color: #a83030; cursor: pointer; }
+        .scan-photo-modal { position: fixed; inset: 0; z-index: 3900; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; background: rgba(5,25,17,.86); }
+        .scan-photo-modal[hidden] { display: none; }
+        .scan-photo-close { align-self: flex-end; width: 38px; height: 38px; border: 0; border-radius: 50%; background: #fff; color: #173e2d; font-size: 18px; cursor: pointer; }
+        .scan-photo-image { display: block; max-width: min(900px, calc(100vw - 40px)); max-height: calc(100vh - 100px); object-fit: contain; border-radius: 8px; background: #16231b; }
+        .scan-photo-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+        .scan-photo-print { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 9px 16px; border: 0; border-radius: 8px; background: #0b7546; color: #fff; font: 700 12px Inter, sans-serif; cursor: pointer; }
+        .scan-photo-print:hover { background: #167447; }
+        .sidebar-overlay, .mobile-menu { display: none; }
+        @media (max-width: 768px) {
+            .dashboard-sidebar { width: 260px; padding: 24px 16px; transform: translateX(-100%); }
+            .dashboard-sidebar.is-open { transform: translateX(0); }
+            .dashboard-sidebar .sidebar-brand { justify-content: flex-start; padding: 8px 10px 28px; }
+            .dashboard-sidebar .sidebar-brand > div:not(.mini-logo) { display: block; }
+            .dashboard-sidebar .nav-item { justify-content: flex-start; gap: 13px; padding: 13px 14px; font-size: 13px; }
+            .dashboard-sidebar .nav-disclosure::after { display: block; }
+            .sidebar-overlay.is-open { position: fixed; inset: 0; z-index: 999; display: block; background: rgba(0,0,0,.35); }
+            .dashboard-page { width: 100%; margin-left: 0; padding: 70px 16px 24px; }
+            .mobile-menu { position: fixed; top: 14px; left: 14px; z-index: 1100; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; border: 0; border-radius: 10px; background: #0b3d2e; color: #fff; font-size: 18px; }
+            .scanner-layout { grid-template-columns: 1fr; }
+            .scan-camera-stage { min-height: 280px; }
+        }
+        @media (max-width: 520px) {
+            .page-header { align-items: flex-start; flex-direction: column; }
+            .scan-review-modal { gap: 8px; padding: 10px; }
+            .scan-review-image { max-width: calc(100vw - 20px); max-height: calc(100vh - 170px); }
+            .scan-review-button { width: 36px; height: 36px; font-size: 14px; }
+            .scan-review-tools { gap: 8px 12px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+    <aside class="dashboard-sidebar" id="sidebar" aria-label="Main navigation">
+        <div class="sidebar-brand">
+            <div class="mini-logo">CSJ</div>
+            <div><strong>Colegio de San Jose</strong><small>Document Tracking System</small></div>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="<?php echo htmlspecialchars($dashboardUrl, ENT_QUOTES, 'UTF-8'); ?>" class="nav-item"><i class="fa-solid fa-chart-pie"></i>Dashboard</a>
+            <?php if (($_SESSION['user_role'] ?? '') !== 'admin'): ?>
+                <div class="documents-nav-group">
+                    <button type="button" class="nav-item nav-disclosure" aria-expanded="false"><i class="fa-solid fa-file-circle-plus"></i>Create Document</button>
+                    <a href="create_document.php" class="nav-subitem"><i class="fa-solid fa-file-circle-plus"></i>Create Document</a>
+                    <a href="scan_document.php" class="nav-subitem active" aria-current="page"><i class="fa-solid fa-camera"></i>Scan Document</a>
+                </div>
+            <?php endif; ?>
+            <a href="track_document.php" class="nav-item"><i class="fa-solid fa-location-dot"></i>Track Document</a>
+            <div class="documents-nav-group">
+                <button type="button" class="nav-item nav-disclosure" aria-expanded="false"><i class="fa-solid fa-folder-open"></i>My Documents</button>
+                <a href="my_documents.php" class="nav-subitem"><i class="fa-solid fa-folder-open"></i>My Documents</a>
+                <a href="received_documents.php" class="nav-subitem"><i class="fa-solid fa-inbox"></i>Received Documents</a>
+            </div>
+            <a href="logout.php" class="nav-item nav-logout"><i class="fa-solid fa-right-from-bracket"></i>Log Out</a>
+        </nav>
+    </aside>
+    <main class="dashboard-page">
+        <div class="page-container">
+            <button class="mobile-menu" id="mobileMenu" type="button" aria-label="Open navigation" aria-expanded="false"><i class="fa-solid fa-bars"></i></button>
+            <header class="page-header">
+                <div><h1>Scan Document</h1><p>Capture pages and review each photo. Your confirmed photos appear in the list and are combined into a PDF automatically.</p></div>
+                <a class="back-link" href="create_document.php"><i class="fa-solid fa-arrow-left"></i> Create Document</a>
+            </header>
+            <section class="scanner-card" aria-label="Document scanner">
+                <div class="scanner-layout">
+                    <div>
+                        <div class="scan-camera-stage">
+                            <video class="scanner-video" id="scannerVideo" autoplay playsinline muted></video>
+                            <button class="scan-camera-button" id="captureScanPage" type="button" aria-label="Capture document page" title="Capture page" disabled><i class="fa-solid fa-camera"></i></button>
+                        </div>
+                        <p class="scan-status" id="scanStatus" role="status" aria-live="polite">Allow camera access to begin scanning.</p>
+                        <div class="scan-actions">
+                            <a class="scan-control-button" id="downloadScanPdf" href="#" download="doctrack-scan.pdf" hidden><i class="fa-solid fa-floppy-disk"></i> Save PDF</a>
+                            <button class="scan-control-button" id="printScanPdf" type="button" hidden><i class="fa-solid fa-print"></i> Print PDF</button>
+                        </div>
+                    </div>
+                    <div><strong>Scanned pages (<span id="scanPageCount">0</span>)</strong><div class="scan-page-list" id="scanPageList"></div></div>
+                </div>
+            </section>
+        </div>
+    </main>
+    <div class="scan-review-modal" id="scanReviewModal" role="dialog" aria-modal="true" aria-label="Review captured document" hidden>
+        <img class="scan-review-image" id="scanReview" alt="Review the captured document image">
+        <div class="scan-review-actions">
+            <button class="scan-review-button scan-review-retake" id="retakeScanPage" type="button" aria-label="Retake photo" title="Retake"><i class="fa-solid fa-xmark"></i></button>
+            <button class="scan-review-button scan-review-confirm" id="confirmScanPage" type="button" aria-label="Use this photo" title="Use this photo"><i class="fa-solid fa-check"></i></button>
+        </div>
+        <div class="scan-review-tools">
+            <label for="scanFilter">Scan style
+                <select id="scanFilter">
+                    <option value="color">Color</option>
+                    <option value="enhanced" selected>Enhance</option>
+                    <option value="grayscale">Grayscale</option>
+                    <option value="bw">Black &amp; white</option>
+                </select>
+            </label>
+            <label><input id="autoCrop" type="checkbox" checked> Auto-trim edges</label>
+        </div>
+    </div>
+    <div class="scan-photo-modal" id="scanPhotoModal" role="dialog" aria-modal="true" aria-label="Captured photo" hidden>
+        <button class="scan-photo-close" id="closeScanPhoto" type="button" aria-label="Close photo"><i class="fa-solid fa-xmark"></i></button>
+        <img class="scan-photo-image" id="scanPhotoImage" alt="Selected captured photo">
+        <div class="scan-photo-actions">
+            <button class="scan-photo-print" id="saveScanPhotoJpg" type="button"><i class="fa-solid fa-image"></i> Save JPG</button>
+            <button class="scan-photo-print" id="saveScanPhotoPdf" type="button"><i class="fa-solid fa-file-pdf"></i> Save PDF</button>
+            <button class="scan-photo-print" id="printScanPhoto" type="button"><i class="fa-solid fa-print"></i> Print Picture</button>
+        </div>
+    </div>
+    <script>
+        const scannerVideo = document.getElementById('scannerVideo');
+        const scanStatus = document.getElementById('scanStatus');
+        const captureScanPage = document.getElementById('captureScanPage');
+        const scanPageCount = document.getElementById('scanPageCount');
+        const scanPageList = document.getElementById('scanPageList');
+        const scanReview = document.getElementById('scanReview');
+        const scanReviewModal = document.getElementById('scanReviewModal');
+        const confirmScanPage = document.getElementById('confirmScanPage');
+        const retakeScanPage = document.getElementById('retakeScanPage');
+        const scanFilter = document.getElementById('scanFilter');
+        const autoCrop = document.getElementById('autoCrop');
+        const scanPhotoModal = document.getElementById('scanPhotoModal');
+        const scanPhotoImage = document.getElementById('scanPhotoImage');
+        const closeScanPhoto = document.getElementById('closeScanPhoto');
+        const saveScanPhotoJpg = document.getElementById('saveScanPhotoJpg');
+        const saveScanPhotoPdf = document.getElementById('saveScanPhotoPdf');
+        const printScanPhoto = document.getElementById('printScanPhoto');
+        const downloadScanPdf = document.getElementById('downloadScanPdf');
+        const printScanPdf = document.getElementById('printScanPdf');
+        const scannedPages = [];
+        let scannerStream = null;
+        let scanPdfUrl = null;
+        let pendingScanPage = null;
+        let capturedScanSource = null;
+        let activePhotoNumber = 0;
+
+        const setScanStatus = (message, isError = false) => {
+            scanStatus.textContent = message;
+            scanStatus.classList.toggle('error', isError);
+        };
+
+        const clearGeneratedPdf = () => {
+            if (scanPdfUrl) {
+                URL.revokeObjectURL(scanPdfUrl);
+                scanPdfUrl = null;
+            }
+            downloadScanPdf.hidden = true;
+            printScanPdf.hidden = true;
+        };
+
+        const createPdfFromScannedPhotos = async () => {
+            const JsPdf = window.jspdf && window.jspdf.jsPDF;
+            if (!JsPdf) {
+                setScanStatus('The PDF tool could not be loaded. Check your internet connection and reload the page.', true);
+                return;
+            }
+            if (!scannedPages.length) {
+                clearGeneratedPdf();
+                return;
+            }
+
+            setScanStatus('Updating the PDF from your confirmed photos...');
+            try {
+                const pdf = new JsPdf({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+                const pageWidth = pdf.internal.pageSize.getWidth();
+                const pageHeight = pdf.internal.pageSize.getHeight();
+                scannedPages.forEach((imageData, index) => {
+                    if (index > 0) pdf.addPage();
+                    const image = pdf.getImageProperties(imageData);
+                    const fit = Math.min((pageWidth - 20) / image.width, (pageHeight - 20) / image.height);
+                    const width = image.width * fit;
+                    const height = image.height * fit;
+                    pdf.addImage(imageData, 'JPEG', (pageWidth - width) / 2, (pageHeight - height) / 2, width, height);
+                });
+                const pdfBlob = pdf.output('blob');
+                clearGeneratedPdf();
+                scanPdfUrl = URL.createObjectURL(pdfBlob);
+                downloadScanPdf.href = scanPdfUrl;
+                downloadScanPdf.hidden = false;
+                printScanPdf.hidden = false;
+                setScanStatus(`PDF updated with ${scannedPages.length} photo(s). Save or print it when ready.`);
+            } catch (error) {
+                setScanStatus(error.message || 'The scanned PDF could not be created.', true);
+            }
+        };
+
+        const stopCamera = () => {
+            if (scannerStream) {
+                scannerStream.getTracks().forEach((track) => track.stop());
+                scannerStream = null;
+            }
+            scannerVideo.srcObject = null;
+            captureScanPage.disabled = true;
+        };
+
+        const openScanner = async () => {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                setScanStatus('Camera scanning requires a supported browser and a secure connection (HTTPS or localhost).', true);
+                return;
+            }
+            try {
+                stopCamera();
+                scannerStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+                scannerVideo.srcObject = scannerStream;
+                if (scannerVideo.readyState < HTMLMediaElement.HAVE_METADATA) {
+                    await new Promise((resolve, reject) => {
+                        scannerVideo.addEventListener('loadedmetadata', resolve, { once: true });
+                        scannerVideo.addEventListener('error', reject, { once: true });
+                    });
+                }
+                await scannerVideo.play();
+                if (!scannerVideo.videoWidth || !scannerVideo.videoHeight) throw new Error('The camera has not provided an image yet. Please wait and try again.');
+                captureScanPage.disabled = false;
+                setScanStatus('Camera ready. Position the paper in view and capture each page.');
+            } catch (error) {
+                stopCamera();
+                setScanStatus(`Could not open the camera: ${error.message || 'Check camera permissions and try again.'}`, true);
+            }
+        };
+
+        const showScannedPhoto = (index) => {
+            const photo = scannedPages[index];
+            if (!photo) return;
+            activePhotoNumber = index + 1;
+            scanPhotoImage.src = photo;
+            scanPhotoImage.alt = `Picture ${activePhotoNumber}`;
+            scanPhotoModal.setAttribute('aria-label', `Picture ${activePhotoNumber}`);
+            scanPhotoModal.hidden = false;
+            closeScanPhoto.focus();
+        };
+
+        const renderScannedPages = () => {
+            scanPageCount.textContent = String(scannedPages.length);
+            scanPageList.replaceChildren();
+            scannedPages.forEach((page, index) => {
+                const item = document.createElement('div');
+                item.className = 'scan-page-item';
+                const openPhoto = document.createElement('button');
+                openPhoto.type = 'button';
+                openPhoto.className = 'scan-page-open';
+                openPhoto.setAttribute('aria-label', `View Picture ${index + 1}`);
+                const thumbnail = document.createElement('img');
+                thumbnail.className = 'scan-page-thumb';
+                thumbnail.src = page;
+                thumbnail.alt = '';
+                const label = document.createElement('span');
+                label.textContent = `Picture ${index + 1}`;
+                openPhoto.append(thumbnail, label);
+                openPhoto.addEventListener('click', () => showScannedPhoto(index));
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.textContent = 'Remove';
+                remove.className = 'scan-page-remove';
+                remove.setAttribute('aria-label', `Remove scanned page ${index + 1}`);
+                remove.addEventListener('click', () => {
+                    scannedPages.splice(index, 1);
+                    clearGeneratedPdf();
+                    renderScannedPages();
+                    createPdfFromScannedPhotos();
+                });
+                item.append(openPhoto, remove);
+                scanPageList.append(item);
+            });
+        };
+
+        const discardPendingScanPage = () => {
+            pendingScanPage = null;
+            capturedScanSource = null;
+            scanReview.removeAttribute('src');
+            scanReviewModal.hidden = true;
+            captureScanPage.focus();
+        };
+
+        const detectDocumentBounds = (sourceCanvas) => {
+            const sampleCanvas = document.createElement('canvas');
+            const sampleScale = Math.min(1, 120 / Math.max(sourceCanvas.width, sourceCanvas.height));
+            sampleCanvas.width = Math.max(1, Math.round(sourceCanvas.width * sampleScale));
+            sampleCanvas.height = Math.max(1, Math.round(sourceCanvas.height * sampleScale));
+            const sampleContext = sampleCanvas.getContext('2d', { willReadFrequently: true });
+            if (!sampleContext) return null;
+            sampleContext.drawImage(sourceCanvas, 0, 0, sampleCanvas.width, sampleCanvas.height);
+
+            const { data } = sampleContext.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+            const width = sampleCanvas.width;
+            const height = sampleCanvas.height;
+            const gray = new Uint8Array(width * height);
+            const histogram = new Uint32Array(256);
+            for (let pixel = 0; pixel < gray.length; pixel += 1) {
+                const offset = pixel * 4;
+                const value = Math.round(data[offset] * 0.299 + data[offset + 1] * 0.587 + data[offset + 2] * 0.114);
+                gray[pixel] = value;
+                histogram[value] += 1;
+            }
+
+            const total = gray.length;
+            let weightedTotal = 0;
+            for (let level = 0; level < histogram.length; level += 1) weightedTotal += level * histogram[level];
+            let backgroundWeight = 0;
+            let backgroundTotal = 0;
+            let threshold = 150;
+            let bestVariance = 0;
+            for (let level = 0; level < histogram.length; level += 1) {
+                backgroundWeight += histogram[level];
+                if (!backgroundWeight) continue;
+                const foregroundWeight = total - backgroundWeight;
+                if (!foregroundWeight) break;
+                backgroundTotal += level * histogram[level];
+                const meanBackground = backgroundTotal / backgroundWeight;
+                const meanForeground = (weightedTotal - backgroundTotal) / foregroundWeight;
+                const variance = backgroundWeight * foregroundWeight * (meanBackground - meanForeground) ** 2;
+                if (variance > bestVariance) {
+                    bestVariance = variance;
+                    threshold = level;
+                }
+            }
+            threshold = Math.max(120, threshold);
+
+            const visited = new Uint8Array(total);
+            const queue = new Int32Array(total);
+            let bestComponent = null;
+            for (let start = 0; start < total; start += 1) {
+                if (visited[start] || gray[start] < threshold) continue;
+                let head = 0;
+                let tail = 0;
+                queue[tail++] = start;
+                visited[start] = 1;
+                let minX = width;
+                let minY = height;
+                let maxX = 0;
+                let maxY = 0;
+                let touchesEdge = false;
+                while (head < tail) {
+                    const current = queue[head++];
+                    const x = current % width;
+                    const y = Math.floor(current / width);
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x);
+                    maxY = Math.max(maxY, y);
+                    if (x === 0 || y === 0 || x === width - 1 || y === height - 1) touchesEdge = true;
+                    const neighbors = [x > 0 ? current - 1 : -1, x < width - 1 ? current + 1 : -1, y > 0 ? current - width : -1, y < height - 1 ? current + width : -1];
+                    neighbors.forEach((neighbor) => {
+                        if (neighbor >= 0 && !visited[neighbor] && gray[neighbor] >= threshold) {
+                            visited[neighbor] = 1;
+                            queue[tail++] = neighbor;
+                        }
+                    });
+                }
+                const area = tail;
+                if (!touchesEdge && area > total * 0.08 && area < total * 0.92 && (!bestComponent || area > bestComponent.area)) {
+                    bestComponent = { minX, minY, maxX, maxY, area };
+                }
+            }
+            if (!bestComponent) return null;
+
+            const padX = Math.round((bestComponent.maxX - bestComponent.minX) * 0.015);
+            const padY = Math.round((bestComponent.maxY - bestComponent.minY) * 0.015);
+            const left = Math.max(0, bestComponent.minX - padX);
+            const top = Math.max(0, bestComponent.minY - padY);
+            const right = Math.min(width - 1, bestComponent.maxX + padX);
+            const bottom = Math.min(height - 1, bestComponent.maxY + padY);
+            if (right - left < width * 0.35 || bottom - top < height * 0.35) return null;
+            return {
+                x: Math.round(left / sampleScale),
+                y: Math.round(top / sampleScale),
+                width: Math.min(sourceCanvas.width - Math.round(left / sampleScale), Math.round((right - left + 1) / sampleScale)),
+                height: Math.min(sourceCanvas.height - Math.round(top / sampleScale), Math.round((bottom - top + 1) / sampleScale))
+            };
+        };
+
+        const renderPendingScan = () => {
+            if (!capturedScanSource) return;
+            let crop = autoCrop.checked ? detectDocumentBounds(capturedScanSource) : null;
+            const sourceRect = crop || { x: 0, y: 0, width: capturedScanSource.width, height: capturedScanSource.height };
+            const outputCanvas = document.createElement('canvas');
+            outputCanvas.width = sourceRect.width;
+            outputCanvas.height = sourceRect.height;
+            const outputContext = outputCanvas.getContext('2d', { willReadFrequently: true });
+            if (!outputContext) {
+                setScanStatus('Could not prepare the scanned image. Please try again.', true);
+                return;
+            }
+            outputContext.drawImage(capturedScanSource, sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height, 0, 0, outputCanvas.width, outputCanvas.height);
+            if (scanFilter.value !== 'color') {
+                const frame = outputContext.getImageData(0, 0, outputCanvas.width, outputCanvas.height);
+                const pixels = frame.data;
+                for (let offset = 0; offset < pixels.length; offset += 4) {
+                    const gray = pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
+                    if (scanFilter.value === 'enhanced') {
+                        for (let channel = 0; channel < 3; channel += 1) {
+                            pixels[offset + channel] = Math.max(0, Math.min(255, (pixels[offset + channel] - 128) * 1.2 + 142));
+                        }
+                    } else {
+                        const value = scanFilter.value === 'bw' ? (gray > 170 ? 255 : 25) : gray;
+                        pixels[offset] = value;
+                        pixels[offset + 1] = value;
+                        pixels[offset + 2] = value;
+                    }
+                }
+                outputContext.putImageData(frame, 0, 0);
+            }
+            pendingScanPage = outputCanvas.toDataURL('image/jpeg', 0.9);
+            scanReview.src = pendingScanPage;
+            if (autoCrop.checked && !crop) {
+                setScanStatus('No clear page border was found; the full image is shown. Adjust the scan style or retake.');
+            } else {
+                setScanStatus(crop ? 'Page edges trimmed. Adjust the scan style or retake if needed.' : 'Adjust the scan style or retake if needed.');
+            }
+        };
+
+        captureScanPage.addEventListener('click', () => {
+            if (!scannerVideo.videoWidth || !scannerVideo.videoHeight) {
+                setScanStatus('The camera is not ready yet. Please wait and try again.', true);
+                return;
+            }
+            const scale = Math.min(1, 1800 / scannerVideo.videoWidth);
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.round(scannerVideo.videoWidth * scale);
+            canvas.height = Math.round(scannerVideo.videoHeight * scale);
+            const context = canvas.getContext('2d');
+            if (!context) {
+                setScanStatus('Could not capture this page. Please try again.', true);
+                return;
+            }
+            context.drawImage(scannerVideo, 0, 0, canvas.width, canvas.height);
+            capturedScanSource = canvas;
+            renderPendingScan();
+            scanReviewModal.hidden = false;
+            retakeScanPage.focus();
+            setScanStatus('Review the captured image.');
+        });
+
+        scanFilter.addEventListener('change', renderPendingScan);
+        autoCrop.addEventListener('change', renderPendingScan);
+
+        retakeScanPage.addEventListener('click', () => {
+            discardPendingScanPage();
+            setScanStatus('Retake the page when it is positioned clearly in view.');
+        });
+
+        confirmScanPage.addEventListener('click', () => {
+            if (!pendingScanPage) {
+                setScanStatus('Capture an image before confirming it.', true);
+                return;
+            }
+            scannedPages.push(pendingScanPage);
+            clearGeneratedPdf();
+            discardPendingScanPage();
+            renderScannedPages();
+            createPdfFromScannedPhotos();
+        });
+
+        printScanPdf.addEventListener('click', () => {
+            if (!scanPdfUrl) {
+                setScanStatus('The PDF is not ready yet. Please wait for it to finish updating.', true);
+                return;
+            }
+            const printWindow = window.open(scanPdfUrl, '_blank');
+            if (!printWindow) {
+                setScanStatus('The print window was blocked. Allow pop-ups for this site and try again.', true);
+                return;
+            }
+            printWindow.addEventListener('load', () => printWindow.print(), { once: true });
+        });
+
+        const hidePhotoPreview = () => {
+            scanPhotoModal.hidden = true;
+            scanPhotoImage.removeAttribute('src');
+        };
+        closeScanPhoto.addEventListener('click', hidePhotoPreview);
+        scanPhotoModal.addEventListener('click', (event) => {
+            if (event.target === scanPhotoModal) hidePhotoPreview();
+        });
+        const downloadBlob = (blob, filename) => {
+            const downloadUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = filename;
+            document.body.append(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+        };
+        saveScanPhotoJpg.addEventListener('click', () => {
+            const photo = scannedPages[activePhotoNumber - 1];
+            if (!photo) {
+                setScanStatus('Select a captured picture before saving it.', true);
+                return;
+            }
+            const image = new Image();
+            image.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = image.naturalWidth;
+                canvas.height = image.naturalHeight;
+                const context = canvas.getContext('2d');
+                if (!context) {
+                    setScanStatus('The picture could not be prepared for saving.', true);
+                    return;
+                }
+                context.drawImage(image, 0, 0);
+                canvas.toBlob((blob) => {
+                    if (!blob) {
+                        setScanStatus('The JPG could not be created. Please try again.', true);
+                        return;
+                    }
+                    downloadBlob(blob, `picture-${activePhotoNumber}.jpg`);
+                }, 'image/jpeg', 0.92);
+            };
+            image.onerror = () => setScanStatus('The picture could not be loaded for saving.', true);
+            image.src = photo;
+        });
+        saveScanPhotoPdf.addEventListener('click', () => {
+            const photo = scannedPages[activePhotoNumber - 1];
+            const JsPdf = window.jspdf && window.jspdf.jsPDF;
+            if (!photo) {
+                setScanStatus('Select a captured picture before saving it.', true);
+                return;
+            }
+            if (!JsPdf) {
+                setScanStatus('The PDF tool could not be loaded. Check your internet connection and reload the page.', true);
+                return;
+            }
+            try {
+                const pdf = new JsPdf({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+                const pageWidth = pdf.internal.pageSize.getWidth();
+                const pageHeight = pdf.internal.pageSize.getHeight();
+                const image = pdf.getImageProperties(photo);
+                const fit = Math.min((pageWidth - 20) / image.width, (pageHeight - 20) / image.height);
+                const width = image.width * fit;
+                const height = image.height * fit;
+                pdf.addImage(photo, 'JPEG', (pageWidth - width) / 2, (pageHeight - height) / 2, width, height);
+                downloadBlob(pdf.output('blob'), `picture-${activePhotoNumber}.pdf`);
+            } catch (error) {
+                setScanStatus(error.message || 'The picture PDF could not be created.', true);
+            }
+        });
+        printScanPhoto.addEventListener('click', () => {
+            if (!scanPhotoImage.src) {
+                setScanStatus('Select a captured picture before printing it.', true);
+                return;
+            }
+            const printWindow = window.open('', '_blank');
+            if (!printWindow) {
+                setScanStatus('The print window was blocked. Allow pop-ups for this site and try again.', true);
+                return;
+            }
+            printWindow.document.open();
+            printWindow.document.write(`<!DOCTYPE html><html><head><title>Picture ${activePhotoNumber}</title><style>@page{margin:10mm}html,body{margin:0;width:100%;height:100%}body{display:flex;align-items:center;justify-content:center}img{display:block;max-width:100%;max-height:98vh;object-fit:contain}</style></head><body><img src="${scanPhotoImage.src}" alt="Picture ${activePhotoNumber}"></body></html>`);
+            printWindow.document.close();
+            printWindow.addEventListener('load', () => printWindow.print(), { once: true });
+        });
+
+        const sidebar = document.getElementById('sidebar');
+        const mobileMenu = document.getElementById('mobileMenu');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const setMobileSidebarOpen = (isOpen) => {
+            sidebar.classList.toggle('is-open', isOpen);
+            sidebarOverlay.classList.toggle('is-open', isOpen);
+            mobileMenu.setAttribute('aria-expanded', String(isOpen));
+        };
+        mobileMenu.addEventListener('click', () => setMobileSidebarOpen(!sidebar.classList.contains('is-open')));
+        sidebarOverlay.addEventListener('click', () => setMobileSidebarOpen(false));
+        document.querySelectorAll('.nav-disclosure').forEach((button) => {
+            button.addEventListener('click', () => {
+                const group = button.closest('.documents-nav-group');
+                const isOpen = group.classList.toggle('is-open');
+                button.setAttribute('aria-expanded', String(isOpen));
+            });
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && !scanPhotoModal.hidden) {
+                hidePhotoPreview();
+            } else if (event.key === 'Escape' && !scanReviewModal.hidden) {
+                discardPendingScanPage();
+                setScanStatus('Capture canceled. You can try again.');
+            } else if (event.key === 'Escape' && sidebar.classList.contains('is-open')) {
+                setMobileSidebarOpen(false);
+            }
+        });
+        window.addEventListener('pagehide', () => {
+            stopCamera();
+            if (scanPdfUrl) URL.revokeObjectURL(scanPdfUrl);
+        });
+        openScanner();
+    </script>
+</body>
+</html>
